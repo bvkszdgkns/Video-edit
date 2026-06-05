@@ -1,0 +1,934 @@
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { 
+  LayoutDashboard, Kanban, Wallet, Timer, Zap, Download, Upload, 
+  Play, Pause, RotateCcw, Plus, CheckCircle, Circle, ArrowUpRight, 
+  DollarSign, TrendingUp, AlertTriangle, ShieldCheck, HardDrive, ExternalLink 
+} from 'lucide-react';
+
+// ==========================================
+// 1. INITIAL SEED DATA
+// ==========================================
+const initialData = {
+  projects: [
+    {
+      id: "proj-1",
+      name: "Cyberpunk Commercial Cut",
+      clientName: "Neon Media Agency",
+      clientEmail: "contact@neonmedia.tv",
+      rateType: "Fixed", 
+      rate: 3500,
+      hoursLogged: 24.5,
+      stage: "Rough Cut", 
+      assetFolderLink: "https://drive.google.com/drive/folders/mock-neon",
+      notes: [
+        { id: "note-1", timestamp: "01:23", text: "Fix color exposure on the wide shot", completed: false },
+        { id: "note-2", timestamp: "03:45", text: "Snappy sound design transition when text pops up", completed: true }
+      ]
+    },
+    {
+      id: "proj-2",
+      name: "Corporate Retrospective 2026",
+      clientName: "Initech Corp",
+      clientEmail: "billing@initech.com",
+      rateType: "Hourly",
+      rate: 85,
+      hoursLogged: 12.0,
+      stage: "Footage Ingest",
+      assetFolderLink: "https://dropbox.com/sh/mock-initech",
+      notes: []
+    }
+  ],
+  expenses: [
+    { id: "exp-1", name: "Adobe Creative Cloud", amount: 54.99, type: "Recurring", category: "Software" },
+    { id: "exp-2", name: "Envato Elements", amount: 33.00, type: "Recurring", category: "Assets" },
+    { id: "exp-3", name: "LaCie Rugged 4TB HDD", amount: 149.00, type: "One-off", category: "Hardware" }
+  ],
+  invoices: [
+    { id: "inv-1", projectId: "proj-1", invoiceNumber: "INV-2026-001", amount: 1750, status: "Paid", issueDate: "2026-05-15" },
+    { id: "inv-2", projectId: "proj-1", invoiceNumber: "INV-2026-002", amount: 1750, status: "Sent", issueDate: "2026-06-01" }
+  ],
+  activeTimer: {
+    projectId: "proj-1",
+    startTime: null,
+    elapsedSeconds: 0,
+    isRunning: false
+  },
+  timeLogs: [
+    { id: "log-1", projectId: "proj-1", date: "2026-06-04", hours: 4.5 },
+    { id: "log-2", projectId: "proj-1", date: "2026-06-05", hours: 3.2 }
+  ],
+  renderLogs: [
+    { id: "ren-1", resolution: "4K", codec: "ProRes 422 HQ", software: "DaVinci Resolve", hardware: "Mac Studio M2 Ultra", durationMinutes: 12, renderTimeMinutes: 4.5 }
+  ],
+  assetCatalog: [
+    { id: "ast-1", name: "Cinematic Whoosh SFX Pack", tags: ["SFX", "Audio"], location: "Local NAS / Audio / SFX" },
+    { id: "ast-2", name: "Teal & Orange Premium LUT", tags: ["LUT", "Color"], location: "D:/LUTs/Creative/" }
+  ],
+  productivity: {
+    dailyStreak: 8,
+    lastWorkedDate: "2026-06-05"
+  }
+};
+
+const STAGES = [
+  "Footage Ingest", "Script/Storyboarding", "Rough Cut", 
+  "V1 Review", "Audio/Sound Design", "Color Grading", 
+  "Final Render", "Approved", "Archived"
+];
+
+// ==========================================
+// 2. CORE CONTEXT ENGINE (LOCAL STORAGE & BACKUP)
+// ==========================================
+const AppStateContext = createContext(undefined);
+const LOCAL_STORAGE_KEY = 'EDITOR_STUDIO_SYSTEM_STATE';
+
+export function AppStateProvider({ children }) {
+  const [state, setState] = useState(() => {
+    try {
+      const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (savedState) return JSON.parse(savedState);
+    } catch (e) {
+      console.error("Local state loading failed", e);
+    }
+    return initialData;
+  });
+
+  useEffect(() => {
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(state));
+  }, [state]);
+
+  // Persistent Timer Thread Logic
+  useEffect(() => {
+    let interval = null;
+    if (state.activeTimer?.isRunning) {
+      interval = setInterval(() => {
+        setState(prev => {
+          const now = Date.now();
+          const lastChecked = prev.activeTimer.lastChecked || now;
+          const delta = Math.floor((now - lastChecked) / 1000);
+          return {
+            ...prev,
+            activeTimer: {
+              ...prev.activeTimer,
+              elapsedSeconds: prev.activeTimer.elapsedSeconds + (delta || 1),
+              lastChecked: now
+            }
+          };
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [state.activeTimer?.isRunning]);
+
+  const exportSystemState = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state, null, 2));
+    const anchor = document.createElement('a');
+    anchor.setAttribute("href", dataStr);
+    anchor.setAttribute("download", "editor_studio_backup.json");
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  };
+
+  const importSystemState = (e) => {
+    const reader = new FileReader();
+    const file = e.target.files[0];
+    if (!file) return;
+    reader.onload = (evt) => {
+      try {
+        const parsed = JSON.parse(evt.target.result);
+        if (parsed.projects && parsed.expenses) {
+          setState(parsed);
+          alert("Studio backup state restored successfully.");
+        }
+      } catch (err) {
+        alert("Invalid file format.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <AppStateContext.Provider value={{ state, setState, exportSystemState, importSystemState }}>
+      {children}
+    </AppStateContext.Provider>
+  );
+}
+
+function useAppState() {
+  const ctx = useContext(AppStateContext);
+  if (!ctx) throw new Error("useAppState missing provider context context.");
+  return ctx;
+}
+
+// ==========================================
+// 3. FINANCIAL CALCULATIONS ENGINE
+// ==========================================
+function calculateMetrics(state) {
+  const grossIncome = state.invoices
+    .filter(i => i.status === 'Paid')
+    .reduce((acc, curr) => acc + curr.amount, 0);
+
+  const pendingIncome = state.invoices
+    .filter(i => i.status === 'Sent')
+    .reduce((acc, curr) => acc + curr.amount, 0);
+
+  const totalExpenses = state.expenses
+    .reduce((acc, curr) => acc + curr.amount, 0);
+
+  const netProfit = grossIncome - totalExpenses;
+  const taxWithholding = netProfit > 0 ? netProfit * 0.25 : 0;
+  
+  const totalHours = state.projects.reduce((acc, curr) => acc + curr.hoursLogged, 0);
+  const totalRevenueAllTime = state.projects.reduce((acc, curr) => acc + curr.rate, 0);
+  const trueHourlyRate = totalHours > 0 ? (totalRevenueAllTime / totalHours) : 0;
+
+  return { grossIncome, pendingIncome, totalExpenses, netProfit, taxWithholding, trueHourlyRate, totalHours };
+}
+
+// ==========================================
+// 4. VIEWS & COMPONENT ARCHITECTURE
+// ==========================================
+
+// --- SIDEBAR NAVIGATION ---
+function Sidebar({ activeTab, setActiveTab }) {
+  const { exportSystemState, importSystemState } = useAppState();
+  const tabs = [
+    { id: 'dashboard', name: 'Studio Metrics', icon: LayoutDashboard },
+    { id: 'pipeline', name: 'Production Pipeline', icon: Kanban },
+    { id: 'finances', name: 'Finance Engine', icon: Wallet },
+    { id: 'tracker', name: 'Session Timer', icon: Timer },
+    { id: 'utilities', name: 'Utility Studio', icon: Zap },
+  ];
+
+  return (
+    <aside className="w-64 bg-[#151D30] border-r border-[#24324F] flex flex-col justify-between h-screen sticky top-0 font-sans text-gray-200">
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-8">
+          <div className="h-8 w-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-white">Ω</div>
+          <h1 className="text-xl font-extrabold text-white tracking-tight">CINE<span className="text-blue-500">FLOW</span></h1>
+        </div>
+        <nav className="space-y-1">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm font-medium ${
+                  activeTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-400 hover:bg-[#24324F]/50 hover:text-white'
+                }`}
+              >
+                <Icon size={18} /> {tab.name}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+      <div className="p-4 border-t border-[#24324F] bg-black/20 space-y-2">
+        <div className="text-[10px] font-bold tracking-wider text-gray-500 uppercase px-2 mb-1">Local Sandbox Mode</div>
+        <button onClick={exportSystemState} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#24324F]/40 hover:bg-[#24324F] text-xs text-white font-medium rounded-lg transition-colors border border-[#24324F]">
+          <Download size={14} /> Save & Export Backup
+        </button>
+        <label className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-transparent hover:bg-[#24324F]/20 text-xs text-gray-400 hover:text-white font-medium rounded-lg transition-colors border border-dashed border-[#24324F] cursor-pointer">
+          <Upload size={14} /> Restore System Backups
+          <input type="file" accept=".json" onChange={importSystemState} className="hidden" />
+        </label>
+      </div>
+    </aside>
+  );
+}
+
+// --- MODULE 1: DASHBOARD VIEW ---
+function DashboardView() {
+  const { state } = useAppState();
+  const metrics = calculateMetrics(state);
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-3xl font-bold text-white tracking-tight">Studio Performance Suite</h2>
+          <p className="text-gray-400 text-sm mt-1">Real-time localized analytics compiled directly from engine storage instances.</p>
+        </div>
+        <div className="flex items-center gap-2 bg-[#151D30] border border-[#24324F] px-4 py-2 rounded-xl">
+          <Zap size={16} className="text-amber-400" />
+          <span className="text-sm font-semibold text-white">Daily Streak: {state.productivity.dailyStreak} Days</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-[#151D30] p-6 rounded-2xl border border-[#24324F]">
+          <div className="flex justify-between items-start text-gray-400">
+            <span className="text-xs font-bold uppercase tracking-wider">Gross Income</span>
+            <DollarSign size={16} className="text-emerald-500" />
+          </div>
+          <div className="text-2xl font-bold text-white mt-2">${metrics.grossIncome.toLocaleString()}</div>
+          <div className="text-xs text-gray-500 mt-1">From clear settled invoices</div>
+        </div>
+        <div className="bg-[#151D30] p-6 rounded-2xl border border-[#24324F]">
+          <div className="flex justify-between items-start text-gray-400">
+            <span className="text-xs font-bold uppercase tracking-wider">Net Profit margin</span>
+            <TrendingUp size={16} className="text-blue-500" />
+          </div>
+          <div className="text-2xl font-bold text-white mt-2">${metrics.netProfit.toLocaleString()}</div>
+          <div className="text-xs text-emerald-400 mt-1">Post operational expense deductions</div>
+        </div>
+        <div className="bg-[#151D30] p-6 rounded-2xl border border-[#24324F]">
+          <div className="flex justify-between items-start text-gray-400">
+            <span className="text-xs font-bold uppercase tracking-wider">True Hourly Value</span>
+            <ArrowUpRight size={16} className="text-indigo-400" />
+          </div>
+          <div className="text-2xl font-bold text-white mt-2">${metrics.trueHourlyRate.toFixed(2)}/hr</div>
+          <div className="text-xs text-gray-500 mt-1">Across all logged timeline records</div>
+        </div>
+        <div className="bg-[#151D30] p-6 rounded-2xl border border-[#24324F]">
+          <div className="flex justify-between items-start text-gray-400">
+            <span className="text-xs font-bold uppercase tracking-wider">Tax Provision Pool</span>
+            <ShieldCheck size={16} className="text-amber-500" />
+          </div>
+          <div className="text-2xl font-bold text-white mt-2">${metrics.taxWithholding.toLocaleString()}</div>
+          <div className="text-xs text-amber-500 mt-1">Recommended 25% allocation</div>
+        </div>
+      </div>
+
+      {metrics.totalHours > 40 && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 flex gap-3 items-center">
+          <AlertTriangle className="text-red-500 shrink-0" size={20} />
+          <div>
+            <div className="text-sm font-bold text-white">System Guard Alert: Burnout Warning</div>
+            <div className="text-xs text-gray-400 mt-0.5">Your aggregated workspace time allocation exceeds high safety barriers. Consider scheduling asset deployment downtime.</div>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-[#151D30] border border-[#24324F] p-6 rounded-2xl">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4">Pipeline Project Loading Distributions</h3>
+          <div className="space-y-3">
+            {state.projects.map(p => (
+              <div key={p.id} className="space-y-1">
+                <div className="flex justify-between text-xs font-medium">
+                  <span className="text-white">{p.name}</span>
+                  <span className="text-gray-400">{p.hoursLogged} hrs logged</span>
+                </div>
+                <div className="w-full bg-[#24324F] h-2 rounded-full overflow-hidden">
+                  <div className="bg-blue-500 h-full rounded-full" style={{ width: `${Math.min((p.hoursLogged / 40) * 100, 100)}%` }}></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-[#151D30] border border-[#24324F] p-6 rounded-2xl flex flex-col justify-between">
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-2">Cloud Storage & Webhook Mocks</h3>
+            <p className="text-xs text-gray-500 mb-4">Architected API frameworks running within clean simulated runtimes.</p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between p-2 bg-[#0B0F19] rounded-xl text-xs border border-[#24324F]">
+                <span className="text-gray-400">Google Drive Storage Tier Limit</span>
+                <span className="text-emerald-400 font-mono font-bold">12.4 GB / 15 GB Free</span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-[#0B0F19] rounded-xl text-xs border border-[#24324F]">
+                <span className="text-gray-400">Stripe Webhook Verification Status</span>
+                <span className="text-blue-400 font-mono font-bold">READY (TEST_MODE)</span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-[#0B0F19] rounded-xl text-xs border border-[#24324F]">
+                <span className="text-gray-400">External Toggl Engine Background Sync</span>
+                <span className="text-gray-500 font-mono">STANDBY</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- MODULE 2: PIPELINE & REVISION HUB ---
+function PipelineView() {
+  const { state, setState } = useAppState();
+  const [selectedProj, setSelectedProj] = useState(state.projects[0]?.id || null);
+  const [newNote, setNewNote] = useState({ timestamp: "", text: "" });
+
+  const activeProject = state.projects.find(p => p.id === selectedProj);
+
+  const moveProjectStage = (id, nextStage) => {
+    setState(prev => ({
+      ...prev,
+      projects: prev.projects.map(p => p.id === id ? { ...prev.projects.find(x => x.id === id), stage: nextStage } : p)
+    }));
+  };
+
+  const addFeedbackNote = (e) => {
+    e.preventDefault();
+    if (!newNote.text) return;
+    setState(prev => ({
+      ...prev,
+      projects: prev.projects.map(p => p.id === selectedProj ? {
+        ...p,
+        notes: [...p.notes, { id: `note-${Date.now()}`, timestamp: newNote.timestamp || "00:00", text: newNote.text, completed: false }]
+      } : p)
+    }));
+    setNewNote({ timestamp: "", text: "" });
+  };
+
+  const toggleNoteComplete = (projId, noteId) => {
+    setState(prev => ({
+      ...prev,
+      projects: prev.projects.map(p => p.id === projId ? {
+        ...p,
+        notes: p.notes.map(n => n.id === noteId ? { ...n, completed: !n.completed } : n)
+      } : p)
+    }));
+  };
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <div>
+        <h2 className="text-3xl font-bold text-white tracking-tight">Production Pipeline</h2>
+        <p className="text-gray-400 text-sm mt-1">Granular kanban staging matrices paired with real-time feedback anchors.</p>
+      </div>
+
+      {/* Horizontal Stage Matrix Scroller */}
+      <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-thin select-none">
+        {STAGES.map(stage => {
+          const matchedProjects = state.projects.filter(p => p.stage === stage);
+          return (
+            <div key={stage} className="w-80 bg-[#151D30] p-4 rounded-2xl border border-[#24324F] flex-shrink-0 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">{stage}</span>
+                  <span className="px-2 py-0.5 bg-[#24324F] text-gray-400 rounded-md text-[10px] font-bold">{matchedProjects.length}</span>
+                </div>
+                <div className="space-y-3">
+                  {matchedProjects.map(p => (
+                    <div 
+                      key={p.id} 
+                      onClick={() => setSelectedProj(p.id)}
+                      className={`p-3 bg-[#0B0F19] border rounded-xl cursor-pointer transition-all ${selectedProj === p.id ? 'border-blue-500 shadow-lg shadow-blue-500/10' : 'border-[#24324F] hover:border-gray-500'}`}
+                    >
+                      <div className="text-sm font-bold text-white mb-1">{p.name}</div>
+                      <div className="text-xs text-gray-400">{p.clientName}</div>
+                      <div className="mt-3 flex justify-between items-center">
+                        <span className="text-[10px] font-bold tracking-wider px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded border border-blue-500/20">{p.rateType}</span>
+                        <select 
+                          value={p.stage} 
+                          onChange={(e) => moveProjectStage(p.id, e.target.value)}
+                          className="bg-[#151D30] border border-[#24324F] text-[11px] font-medium rounded p-1 text-gray-300 focus:outline-none"
+                        >
+                          {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Active Revision Hub Configuration */}
+      {activeProject ? (
+        <div className="bg-[#151D30] border border-[#24324F] rounded-2xl p-6">
+          <div className="border-b border-[#24324F] pb-4 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <div className="text-xs font-bold text-blue-500 uppercase tracking-wider mb-1">Feedback Logger & Operations Hub</div>
+              <h3 className="text-xl font-bold text-white">{activeProject.name} — {activeProject.clientName}</h3>
+            </div>
+            {activeProject.assetFolderLink && (
+              <a href={activeProject.assetFolderLink} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-[#24324F] text-xs text-white font-medium px-3 py-2 rounded-xl border border-[#24324F] hover:bg-blue-600 hover:border-blue-600 transition-all">
+                <HardDrive size={14} /> Open Secure Asset Directories <ExternalLink size={12} />
+              </a>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="md:col-span-2 space-y-3">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">Timestamped Target Operations</h4>
+              {activeProject.notes.length === 0 ? (
+                <div className="p-4 border border-dashed border-[#24324F] rounded-xl text-center text-xs text-gray-500">No timestamp review markers currently mapped.</div>
+              ) : (
+                <div className="space-y-2">
+                  {activeProject.notes.map(note => (
+                    <div 
+                      key={note.id} 
+                      onClick={() => toggleNoteComplete(activeProject.id, note.id)}
+                      className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${note.completed ? 'bg-black/20 border-[#24324F]/40 opacity-50' : 'bg-[#0B0F19] border-[#24324F]'}`}
+                    >
+                      {note.completed ? <CheckCircle size={16} className="text-emerald-500 shrink-0 mt-0.5" /> : <Circle size={16} className="text-gray-500 shrink-0 mt-0.5" />}
+                      <div className="text-xs">
+                        <span className="font-mono bg-[#24324F] px-1.5 py-0.5 rounded text-blue-400 mr-2 font-bold">{note.timestamp}</span>
+                        <span className={note.completed ? 'line-through text-gray-500' : 'text-gray-200'}>{note.text}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={addFeedbackNote} className="space-y-3 bg-[#0B0F19] p-4 rounded-xl border border-[#24324F] h-fit">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">Add Live Revision Node</h4>
+              <div>
+                <label className="block text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Time Marker</label>
+                <input 
+                  type="text" placeholder="e.g., 04:32" value={newNote.timestamp} onChange={e => setNewNote({...newNote, timestamp: e.target.value})}
+                  className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Note Narrative</label>
+                <textarea 
+                  rows={3} placeholder="Paste client direct instructions..." value={newNote.text} onChange={e => setNewNote({...newNote, text: e.target.value})}
+                  className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500 resize-none"
+                />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 text-xs font-bold py-2 rounded-lg hover:bg-blue-500 text-white transition-colors">Inject Note Context</button>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// --- MODULE 3: HYPER-GRANULAR FINANCE ENGINE ---
+function FinanceView() {
+  const { state, setState } = useAppState();
+  const metrics = calculateMetrics(state);
+  const [newExpense, setNewExpense] = useState({ name: "", amount: "", type: "Recurring", category: "Software" });
+  const [newInvoice, setNewInvoice] = useState({ projectId: state.projects[0]?.id || "", invoiceNumber: "", amount: "", status: "Draft" });
+
+  const addExpense = (e) => {
+    e.preventDefault();
+    if (!newExpense.name || !newExpense.amount) return;
+    setState(prev => ({
+      ...prev,
+      expenses: [...prev.expenses, { id: `exp-${Date.now()}`, name: newExpense.name, amount: parseFloat(newExpense.amount), type: newExpense.type, category: newExpense.category }]
+    }));
+    setNewExpense({ name: "", amount: "", type: "Recurring", category: "Software" });
+  };
+
+  const addInvoice = (e) => {
+    e.preventDefault();
+    if (!newInvoice.invoiceNumber || !newInvoice.amount) return;
+    setState(prev => ({
+      ...prev,
+      invoices: [...prev.invoices, { id: `inv-${Date.now()}`, projectId: newInvoice.projectId, invoiceNumber: newInvoice.invoiceNumber, amount: parseFloat(newInvoice.amount), status: newInvoice.status, issueDate: new Date().toISOString().split('T')[0] }]
+    }));
+    setNewInvoice({ projectId: state.projects[0]?.id || "", invoiceNumber: "", amount: "", status: "Draft" });
+  };
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <div>
+        <h2 className="text-3xl font-bold text-white tracking-tight">Financial Hub & Tax Router</h2>
+        <p className="text-gray-400 text-sm mt-1">Cross-referenced margin calculations tracking operational overhead profiles.</p>
+      </div>
+
+      {/* Expense Framework */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-[#151D30] border border-[#24324F] rounded-2xl p-6">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4">Studio Operational Expenditures</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-gray-300">
+              <thead className="text-[10px] uppercase font-bold tracking-wider border-b border-[#24324F] text-gray-500">
+                <tr>
+                  <th className="pb-3">Descriptor</th>
+                  <th className="pb-3">Tax Target Class</th>
+                  <th className="pb-3">Interval Profile</th>
+                  <th className="pb-3 text-right">Magnitude Allocation</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#24324F]/60">
+                {state.expenses.map(exp => (
+                  <tr key={exp.id} className="hover:bg-black/10">
+                    <td className="py-3 font-semibold text-white">{exp.name}</td>
+                    <td className="py-3"><span className="bg-[#24324F] px-2 py-0.5 rounded text-gray-400">{exp.category}</span></td>
+                    <td className="py-3 text-gray-400">{exp.type}</td>
+                    <td className="py-3 text-right text-red-400 font-bold font-mono">${exp.amount.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <form onSubmit={addExpense} className="bg-[#0B0F19] p-5 rounded-2xl border border-[#24324F] space-y-3 h-fit">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Log Operational Expense</h3>
+          <input 
+            type="text" placeholder="Expense Name" value={newExpense.name} onChange={e => setNewExpense({...newExpense, name: e.target.value})}
+            className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500"
+          />
+          <input 
+            type="number" step="0.01" placeholder="Amount ($)" value={newExpense.amount} onChange={e => setNewExpense({...newExpense, amount: e.target.value})}
+            className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500"
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <select value={newExpense.type} onChange={e => setNewExpense({...newExpense, type: e.target.value})} className="bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-gray-300">
+              <option value="Recurring">Recurring</option>
+              <option value="One-off">One-off</option>
+            </select>
+            <select value={newExpense.category} onChange={e => setNewExpense({...newExpense, category: e.target.value})} className="bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-gray-300">
+              <option value="Software">Software</option>
+              <option value="Assets">Assets</option>
+              <option value="Hardware">Hardware</option>
+            </select>
+          </div>
+          <button type="submit" className="w-full bg-blue-600 text-xs font-bold py-2 rounded-lg hover:bg-blue-500 transition-colors text-white">Commit Cost Record</button>
+        </form>
+      </div>
+
+      {/* Invoice Ledger Base */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-[#151D30] border border-[#24324F] rounded-2xl p-6">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4">Invoice Ledger Matrix</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-gray-300">
+              <thead className="text-[10px] uppercase font-bold tracking-wider border-b border-[#24324F] text-gray-500">
+                <tr>
+                  <th className="pb-3">Invoice ID</th>
+                  <th className="pb-3">Associated Target</th>
+                  <th className="pb-3">Timestamped Generation</th>
+                  <th className="pb-3">Lifecycle Node</th>
+                  <th className="pb-3 text-right">Value Mapping</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#24324F]/60">
+                {state.invoices.map(inv => {
+                  const matchingProj = state.projects.find(p => p.id === inv.projectId);
+                  return (
+                    <tr key={inv.id} className="hover:bg-black/10">
+                      <td className="py-3 font-mono text-blue-400 font-bold">{inv.invoiceNumber}</td>
+                      <td className="py-3 text-white font-medium">{matchingProj?.name || "Global Scope"}</td>
+                      <td className="py-3 text-gray-400">{inv.issueDate}</td>
+                      <td className="py-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          inv.status === 'Paid' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                        }`}>{inv.status}</span>
+                      </td>
+                      <td className="py-3 text-right font-bold text-white font-mono">${inv.amount.toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <form onSubmit={addInvoice} className="bg-[#0B0F19] p-5 rounded-2xl border border-[#24324F] space-y-3 h-fit">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Generate Client Invoice</h3>
+          <select value={newInvoice.projectId} onChange={e => setNewInvoice({...newInvoice, projectId: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-gray-300">
+            {state.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <input 
+            type="text" placeholder="e.g., INV-2026-88" value={newInvoice.invoiceNumber} onChange={e => setNewInvoice({...newInvoice, invoiceNumber: e.target.value})}
+            className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500"
+          />
+          <input 
+            type="number" placeholder="Target Payout Level ($)" value={newInvoice.amount} onChange={e => setNewInvoice({...newInvoice, amount: e.target.value})}
+            className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500"
+          />
+          <select value={newInvoice.status} onChange={e => setNewInvoice({...newInvoice, status: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-gray-300">
+            <option value="Draft">Draft State</option>
+            <option value="Sent">Sent (Awaiting Settlement)</option>
+            <option value="Paid">Paid Fully</option>
+          </select>
+          <button type="submit" className="w-full bg-blue-600 text-xs font-bold py-2 rounded-lg hover:bg-blue-500 transition-colors text-white">Generate Invoice Struct</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// --- MODULE 4: PERSISTENT TRACKING ENGINE ---
+function TrackerView() {
+  const { state, setState } = useAppState();
+  const [selectedProjId, setSelectedProjId] = useState(state.projects[0]?.id || "");
+  const [manualLog, setManualLog] = useState({ date: new Date().toISOString().split('T')[0], hours: "" });
+
+  const formatTime = (totalSeconds) => {
+    const hrs = Math.floor(totalSeconds / 3600).toString().padStart(2, '0');
+    const mins = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
+    const secs = (totalSeconds % 60).toString().padStart(2, '0');
+    return `${hrs}:${mins}:${secs}`;
+  };
+
+  const startTracking = () => {
+    setState(prev => ({
+      ...prev,
+      activeTimer: { ...prev.activeTimer, projectId: selectedProjId, startTime: Date.now(), lastChecked: Date.now(), isRunning: true }
+    }));
+  };
+
+  const stopTracking = () => {
+    if (!state.activeTimer.isRunning) return;
+    const hoursEarned = parseFloat((state.activeTimer.elapsedSeconds / 3600).toFixed(2));
+    
+    setState(prev => ({
+      ...prev,
+      timeLogs: [...prev.timeLogs, { id: `log-${Date.now()}`, projectId: prev.activeTimer.projectId, date: new Date().toISOString().split('T')[0], hours: hoursEarned }],
+      projects: prev.projects.map(p => p.id === prev.activeTimer.projectId ? { ...p, hoursLogged: parseFloat((p.hoursLogged + hoursEarned).toFixed(2)) } : p),
+      activeTimer: { projectId: "", startTime: null, elapsedSeconds: 0, isRunning: false }
+    }));
+  };
+
+  const resetTimerState = () => {
+    setState(prev => ({
+      ...prev,
+      activeTimer: { projectId: "", startTime: null, elapsedSeconds: 0, isRunning: false }
+    }));
+  };
+
+  const handleManualOverride = (e) => {
+    e.preventDefault();
+    if (!manualLog.hours) return;
+    const hrs = parseFloat(manualLog.hours);
+    setState(prev => ({
+      ...prev,
+      timeLogs: [...prev.timeLogs, { id: `log-${Date.now()}`, projectId: selectedProjId, date: manualLog.date, hours: hrs }],
+      projects: prev.projects.map(p => p.id === selectedProjId ? { ...p, hoursLogged: parseFloat((p.hoursLogged + hrs).toFixed(2)) } : p)
+    }));
+    setManualLog({ date: new Date().toISOString().split('T')[0], hours: "" });
+  };
+
+  const currentActiveProjectText = state.projects.find(p => p.id === state.activeTimer.projectId)?.name || "No Selected Profile Context";
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <div>
+        <h2 className="text-3xl font-bold text-white tracking-tight">Persistent Clock Engine</h2>
+        <p className="text-gray-400 text-sm mt-1">Multi-day hardware persistence threads surviving absolute session termination profiles.</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Stopwatch Engine Interface */}
+        <div className="lg:col-span-2 bg-[#151D30] border border-[#24324F] rounded-2xl p-8 flex flex-col items-center justify-center text-center">
+          <div className="text-xs font-bold text-blue-500 uppercase tracking-wider mb-2">Active Session Context</div>
+          <div className="text-sm font-medium text-white mb-6">{state.activeTimer.isRunning ? currentActiveProjectText : "Engine Awaiting Execution"}</div>
+          
+          <div className="text-6xl font-black text-white font-mono tracking-wider mb-8 bg-black/30 px-8 py-4 rounded-2xl border border-[#24324F]">
+            {formatTime(state.activeTimer.elapsedSeconds)}
+          </div>
+
+          <div className="flex gap-4">
+            {!state.activeTimer.isRunning ? (
+              <button onClick={startTracking} className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-emerald-600/20 text-sm">
+                <Play size={16} /> Fire Tracking Stream
+              </button>
+            ) : (
+              <button onClick={stopTracking} className="flex items-center gap-2 px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-red-600/20 text-sm">
+                <Pause size={16} /> Halt & Commit Log
+              </button>
+            )}
+            <button onClick={resetTimerState} className="flex items-center gap-2 px-4 py-3 bg-[#24324F] hover:bg-[#24324F]/80 text-gray-300 font-medium rounded-xl transition-all border border-[#24324F] text-sm">
+              <RotateCcw size={16} /> Wipe
+            </button>
+          </div>
+        </div>
+
+        {/* Manual Compensation Control Panel */}
+        <div className="bg-[#151D30] border border-[#24324F] rounded-2xl p-6 flex flex-col justify-between">
+          <form onSubmit={handleManualOverride} className="space-y-4">
+            <div>
+              <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400">Manual Time Injection Override</h3>
+              <p className="text-xs text-gray-500 mt-1">Direct state insertion metrics bypass clock loop sequences.</p>
+            </div>
+            <select value={selectedProjId} onChange={e => setSelectedProjId(e.target.value)} className="w-full bg-[#0B0F19] border border-[#24324F] rounded-lg p-2 text-xs text-gray-300">
+              {state.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <input 
+              type="date" value={manualLog.date} onChange={e => setManualLog({...manualLog, date: e.target.value})}
+              className="w-full bg-[#0B0F19] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none"
+            />
+            <input 
+              type="number" step="0.1" placeholder="Decimal Hours (e.g., 2.5)" value={manualLog.hours} onChange={e => setManualLog({...manualLog, hours: e.target.value})}
+              className="w-full bg-[#0B0F19] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none"
+            />
+            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-xs font-bold py-2.5 rounded-lg transition-colors text-white">Inject Log Block</button>
+          </form>
+        </div>
+      </div>
+
+      {/* Historical Ledger Blocks */}
+      <div className="bg-[#151D30] border border-[#24324F] rounded-2xl p-6">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4">Historical Studio Timeline Entries</h3>
+        <div className="space-y-2">
+          {state.timeLogs.map(log => {
+            const proj = state.projects.find(p => p.id === log.projectId);
+            return (
+              <div key={log.id} className="flex justify-between items-center p-3 bg-[#0B0F19] border border-[#24324F] rounded-xl text-xs">
+                <div>
+                  <span className="font-bold text-white">{proj?.name || "Global Anchor"}</span>
+                  <span className="text-gray-500 ml-2 font-mono">[{log.date}]</span>
+                </div>
+                <div className="font-bold text-blue-400 font-mono">+{log.hours} Processing Hours</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- MODULE 5: THE UTILITY PACK SUITE ---
+function UtilitiesView() {
+  const { state, setState } = useAppState();
+  const [newRender, setNewRender] = useState({ resolution: "4K", codec: "ProRes 422 HQ", software: "DaVinci Resolve", hardware: "Mac Studio M2 Ultra", durationMinutes: "", renderTimeMinutes: "" });
+  const [newAsset, setNewAsset] = useState({ name: "", tags: "SFX", location: "" });
+
+  const addRenderLog = (e) => {
+    e.preventDefault();
+    if (!newRender.durationMinutes || !newRender.renderTimeMinutes) return;
+    setState(prev => ({
+      ...prev,
+      renderLogs: [...prev.renderLogs, {
+        id: `ren-${Date.now()}`,
+        ...newRender,
+        durationMinutes: parseFloat(newRender.durationMinutes),
+        renderTimeMinutes: parseFloat(newRender.renderTimeMinutes)
+      }]
+    }));
+    setNewRender({ resolution: "4K", codec: "ProRes 422 HQ", software: "DaVinci Resolve", hardware: "Mac Studio M2 Ultra", durationMinutes: "", renderTimeMinutes: "" });
+  };
+
+  const addAssetNode = (e) => {
+    e.preventDefault();
+    if (!newAsset.name || !newAsset.location) return;
+    setState(prev => ({
+      ...prev,
+      assetCatalog: [...prev.assetCatalog, { id: `ast-${Date.now()}`, name: newAsset.name, tags: [newAsset.tags], location: newAsset.location }]
+    }));
+    setNewAsset({ name: "", tags: "SFX", location: "" });
+  };
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <div>
+        <h2 className="text-3xl font-bold text-white tracking-tight">Utility Pack Framework</h2>
+        <p className="text-gray-400 text-sm mt-1">Render telemetry calibration matrices mapped to hardware profiling registries.</p>
+      </div>
+
+      {/* Render Telemetry Logging Modules */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-[#151D30] border border-[#24324F] rounded-2xl p-6">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4">Hardware Processing Engine Telemetry</h3>
+          <div className="space-y-3">
+            {state.renderLogs.map(ren => {
+              const efficiencyRatio = (ren.durationMinutes / ren.renderTimeMinutes).toFixed(1);
+              return (
+                <div key={ren.id} className="p-4 bg-[#0B0F19] border border-[#24324F] rounded-xl text-xs space-y-2">
+                  <div className="flex justify-between font-bold text-white">
+                    <span>{ren.software} ({ren.codec})</span>
+                    <span className="text-emerald-400 font-mono">{efficiencyRatio}x Spatial Compute Speed</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-gray-400 font-medium">
+                    <div>Res: <span className="text-white">{ren.resolution}</span></div>
+                    <div>Hardware: <span className="text-white text-[11px]">{ren.hardware}</span></div>
+                    <div>Timeline Length: <span className="text-white">{ren.durationMinutes}m</span></div>
+                    <div>Render Complete: <span className="text-white">{ren.renderTimeMinutes}m</span></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <form onSubmit={addRenderLog} className="bg-[#0B0F19] p-5 rounded-2xl border border-[#24324F] space-y-3 h-fit">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Log Processing Statistics</h3>
+          <select value={newRender.resolution} onChange={e => setNewRender({...newRender, resolution: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-gray-300">
+            <option value="4K">4K UHD Resolution</option>
+            <option value="1080p">1080p HD Scope</option>
+            <option value="8K">8K Master Frame</option>
+          </select>
+          <input type="text" placeholder="Codec Profile (e.g., ProRes)" value={newRender.codec} onChange={e => setNewRender({...newRender, codec: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none" />
+          <input type="text" placeholder="Application Engine" value={newRender.software} onChange={e => setNewRender({...newRender, software: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none" />
+          <input type="text" placeholder="Hardware Rig Configuration" value={newRender.hardware} onChange={e => setNewRender({...newRender, hardware: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none" />
+          <div className="grid grid-cols-2 gap-2">
+            <input type="number" placeholder="Duration (m)" value={newRender.durationMinutes} onChange={e => setNewRender({...newRender, durationMinutes: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none" />
+            <input type="number" placeholder="Render (m)" value={newRender.renderTimeMinutes} onChange={e => setNewRender({...newRender, renderTimeMinutes: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none" />
+          </div>
+          <button type="submit" className="w-full bg-blue-600 text-xs font-bold py-2 rounded-lg text-white">Log Telemetry Block</button>
+        </form>
+      </div>
+
+      {/* Asset Tracking Systems */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-[#151D30] border border-[#24324F] rounded-2xl p-6">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4">Localized Studio Asset Catalog</h3>
+          <div className="space-y-2">
+            {state.assetCatalog.map(asset => (
+              <div key={asset.id} className="flex justify-between items-center p-3 bg-[#0B0F19] border border-[#24324F] rounded-xl text-xs">
+                <div>
+                  <div className="font-bold text-white">{asset.name}</div>
+                  <div className="text-gray-500 font-mono mt-0.5">{asset.location}</div>
+                </div>
+                <span className="bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded text-[10px] font-bold uppercase">{asset.tags[0]}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <form onSubmit={addAssetNode} className="bg-[#0B0F19] p-5 rounded-2xl border border-[#24324F] space-y-3 h-fit">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Index Asset Element</h3>
+          <input type="text" placeholder="Asset Identifier" value={newAsset.name} onChange={e => setNewAsset({...newAsset, name: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none" />
+          <select value={newAsset.tags} onChange={e => setNewAsset({...newAsset, tags: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-gray-300">
+            <option value="SFX">SFX Block</option>
+            <option value="LUT">LUT Preset Matrix</option>
+            <option value="Graphics">Motion Graphic Structs</option>
+          </select>
+          <input type="text" placeholder="Target Directory Address Pointer" value={newAsset.location} onChange={e => setNewAsset({...newAsset, location: e.target.value})} className="w-full bg-[#151D30] border border-[#24324F] rounded-lg p-2 text-xs text-white focus:outline-none" />
+          <button type="submit" className="w-full bg-blue-600 text-xs font-bold py-2 rounded-lg text-white">Append Asset Mapping</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 5. MASTER INTEGRATION LAYOUT ORCHESTRATOR
+// ==========================================
+function MainDashboardLayout() {
+  const [activeTab, setActiveTab] = useState('dashboard');
+
+  const renderViewContent = () => {
+    switch (activeTab) {
+      case 'dashboard': return <DashboardView />;
+      case 'pipeline': return <PipelineView />;
+      case 'finances': return <FinanceView />;
+      case 'tracker': return <TrackerView />;
+      case 'utilities': return <UtilitiesView />;
+      default: return <DashboardView />;
+    }
+  };
+
+  return (
+    <div className="flex bg-[#0B0F19] min-h-screen font-sans text-gray-200 antialiased">
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <main className="flex-1 overflow-y-auto max-h-screen">
+        <header className="border-b border-[#24324F] bg-[#151D30]/40 backdrop-blur px-8 py-4 flex items-center justify-between sticky top-0 z-40">
+          <div className="text-xs font-bold tracking-wider text-gray-500 uppercase">Enterprise Video Workspace Profile Studio</div>
+          <div className="flex items-center gap-4">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              Local Web Storage Engine Active
+            </span>
+          </div>
+        </header>
+        <div className="p-8 max-w-7xl mx-auto w-full">
+          {renderViewContent()}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AppStateProvider>
+      <MainDashboardLayout />
+    </AppStateProvider>
+  );
+}
